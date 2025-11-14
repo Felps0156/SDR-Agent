@@ -1,1 +1,4 @@
 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
+
+Faça com que o agente responda em segunda pessoa (para o cliente)
+Nunca dizer quais são os compromissos

@@ -1,18 +1,18 @@
-import datetime
 from langchain_core.tools import tool
 from googleapiclient.errors import HttpError
 
-from typing import Annotated, Optional, List
+from typing import List
 
-from tools.calendar_functions import cria_calendario, listar_calendarios, listar_eventos_calendario, criar_evento_programado, excluir_evento, atualizar_evento
+import pytz
+from datetime import datetime, time, timedelta, timezone
+
 
 try:
-    from API.google_auth import get_calendar_service
+    from API.google_auth import service
 except ImportError:
     print("ERRO: Não foi possível encontrar o arquivo 'google_calendar.py'")
 
 try:
-    service = get_calendar_service()
     print("Serviço do Google Calendar carregado em calendar_tools.py")
 except Exception as e:
     print(f"Erro grave ao inicializar o serviço do Google Calendar: {e}")
@@ -46,7 +46,7 @@ def list_upcoming_events(max_results: int = 10):
         return "Erro: O serviço do Google Calendar não foi inicializado."
         
     try:
-        now = datetime.datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat()
         events_result = (
             service.events()
             .list(
@@ -69,35 +69,104 @@ def list_upcoming_events(max_results: int = 10):
         return f"Erro ao acessar a API do Google Calendar: {error}"
     except Exception as e:
         return f"Erro inesperado ao listar eventos: {e}"
-    
+
 @tool
 def create_calendar_event(
-    summary: str, 
-    start_time: str, 
-    end_time: str, 
-    attendees: List[str] = None, 
-    location: str = None, 
+    summary: str,
+    start_time: str,
+    end_time: str = None,
+    attendees: List[str] = None,
+    location: str = None,
     description: str = None
 ):
     """
-    Cria um novo evento no Google Calendar.
-    Datas devem estar no formato: 'AAAA-MM-DDTHH:MM:SS' (ex: '2025-12-25T15:00:00')
-    'attendees' deve ser uma lista de emails (strings).
+    Cria um novo evento no Google Calendar, APENAS SE O HORÁRIO ESTIVER LIVRE.
+    - 'start_time' pode ser uma data/hora completa ('AAAA-MM-DDTHH:MM:SS') ou apenas uma hora ('HH:MM:SS').
+    - Se apenas a hora for fornecida, o evento será agendado para o dia de HOJE.
+    - Se 'end_time' não for fornecido, o evento terá automaticamente a duração de 1 hora.
+    - 'attendees' deve ser uma lista de emails (strings).
+    - Se o horário já estiver ocupado, a ferramenta retornará uma mensagem de erro e não diga qual evento esta agendado para o msm horario.
     """
     if not service:
         return "Erro: O serviço do Google Calendar não foi inicializado."
 
+    local_tz = pytz.timezone('America/Sao_Paulo') # Define seu fuso horário
+
+    try:
+        # Tenta parsear 'start_time' como data/hora completa
+        start_dt_naive = datetime.fromisoformat(start_time)
+    except ValueError:
+        try:
+            # Se falhar, tenta parsear como hora (ex: "14:00:00")
+            time_obj = time.fromisoformat(start_time)
+            today = datetime.now(local_tz).date() # Pega a data de hoje JÁ NO FUSO
+            start_dt_naive = datetime.combine(today, time_obj)
+        except ValueError:
+            return "Formato de 'start_time' inválido. Use 'AAAA-MM-DDTHH:MM:SS' ou 'HH:MM:SS' (para hoje)."
+
+    # Torna o start_dt "aware" (ciente do fuso)
+    if start_dt_naive.tzinfo is None:
+        start_dt = local_tz.localize(start_dt_naive)
+    else:
+        start_dt = start_dt_naive
+
+    # Lógica para 'end_time'
+    if end_time:
+        try:
+            end_dt_naive = datetime.fromisoformat(end_time)
+        except ValueError:
+            try:
+                time_obj = time.fromisoformat(end_time)
+                end_dt_naive = datetime.combine(start_dt.date(), time_obj)
+            except ValueError:
+                return "Formato de 'end_time' inválido. Use 'AAAA-MM-DDTHH:MM:SS' ou 'HH:MM:SS'."
+        
+        if end_dt_naive.tzinfo is None:
+            end_dt = local_tz.localize(end_dt_naive)
+        else:
+            end_dt = end_dt_naive
+    else:
+        # Se 'end_time' NÃO foi fornecido, default de 1 hora
+        end_dt = start_dt + timedelta(hours=1)
+    
+    
+    # --- VERIFICAÇÃO DE CONFLITO ---
+    try:
+        print(f"Verificando conflitos entre {start_dt.isoformat()} e {end_dt.isoformat()}...")
+        
+        events_result = service.events().list(
+            calendarId='primary',
+            timeMin=start_dt.isoformat(), # Envia com fuso horário
+            timeMax=end_dt.isoformat(),   # Envia com fuso horário
+            singleEvents=True, # Essencial para expandir eventos recorrentes
+            maxResults=1 # Só precisamos saber se existe pelo menos 1
+        ).execute()
+        
+        conflicting_events = events_result.get('items', [])
+        
+        if conflicting_events:
+            event_summary = conflicting_events[0].get('summary', 'desconhecido')
+            print(f"Conflito encontrado: {event_summary}")
+            return f"Erro: Horário indisponível. Já existe um evento ('{event_summary}') nesse período."
+
+    except HttpError as error:
+        return f"Erro ao verificar conflitos na API: {error}"
+    except Exception as e:
+        return f"Erro inesperado ao verificar conflitos: {e}"
+    
+    # --- Se não houver conflitos, cria o evento ---
+    print("Nenhum conflito. Criando evento...")
     event = {
         'summary': summary,
         'location': location,
         'description': description,
         'start': {
-            'dateTime': start_time,
+            'dateTime': start_dt.isoformat(),
             'timeZone': 'America/Sao_Paulo',
         },
         'end': {
-            'dateTime': end_time,
-            'timeZone': 'America/Sao_Paulo', 
+            'dateTime': end_dt.isoformat(),
+            'timeZone': 'America/Sao_Paulo',
         },
         'attendees': [{'email': email} for email in attendees] if attendees else []
     }
@@ -109,7 +178,7 @@ def create_calendar_event(
         return f"Erro ao criar evento na API: {error}"
     except Exception as e:
         return f"Erro inesperado ao criar evento: {e}"
-    
+
 @tool
 def search_calendar_events(query: str, max_results: int = 10):
     """
