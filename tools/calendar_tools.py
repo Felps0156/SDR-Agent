@@ -90,27 +90,24 @@ def create_calendar_event(
     if not service:
         return "Erro: O serviço do Google Calendar não foi inicializado."
 
-    local_tz = pytz.timezone('America/Sao_Paulo') # Define seu fuso horário
+    local_tz = pytz.timezone('America/Sao_Paulo') 
 
     try:
-        # Tenta parsear 'start_time' como data/hora completa
         start_dt_naive = datetime.fromisoformat(start_time)
     except ValueError:
         try:
-            # Se falhar, tenta parsear como hora (ex: "14:00:00")
             time_obj = time.fromisoformat(start_time)
-            today = datetime.now(local_tz).date() # Pega a data de hoje JÁ NO FUSO
+            today = datetime.now(local_tz).date() 
             start_dt_naive = datetime.combine(today, time_obj)
         except ValueError:
             return "Formato de 'start_time' inválido. Use 'AAAA-MM-DDTHH:MM:SS' ou 'HH:MM:SS' (para hoje)."
 
-    # Torna o start_dt "aware" (ciente do fuso)
+
     if start_dt_naive.tzinfo is None:
         start_dt = local_tz.localize(start_dt_naive)
     else:
         start_dt = start_dt_naive
 
-    # Lógica para 'end_time'
     if end_time:
         try:
             end_dt_naive = datetime.fromisoformat(end_time)
@@ -126,20 +123,22 @@ def create_calendar_event(
         else:
             end_dt = end_dt_naive
     else:
-        # Se 'end_time' NÃO foi fornecido, default de 1 hora
         end_dt = start_dt + timedelta(hours=1)
-    
-    
-    # --- VERIFICAÇÃO DE CONFLITO ---
+
     try:
-        print(f"Verificando conflitos entre {start_dt.isoformat()} e {end_dt.isoformat()}...")
+        buffer_minutes = 15
+        
+        conflict_check_end_dt = end_dt + timedelta(minutes=buffer_minutes)
+
+        print(f"Verificando conflitos para o evento ({start_dt.strftime('%H:%M')} às {end_dt.strftime('%H:%M')})")
+        print(f"Aplicando buffer de {buffer_minutes} min. Verificando disponibilidade até {conflict_check_end_dt.strftime('%H:%M')}...")
         
         events_result = service.events().list(
             calendarId='primary',
-            timeMin=start_dt.isoformat(), # Envia com fuso horário
-            timeMax=end_dt.isoformat(),   # Envia com fuso horário
-            singleEvents=True, # Essencial para expandir eventos recorrentes
-            maxResults=1 # Só precisamos saber se existe pelo menos 1
+            timeMin=start_dt.isoformat(),
+            timeMax=conflict_check_end_dt.isoformat(), 
+            singleEvents=True, 
+            maxResults=1 
         ).execute()
         
         conflicting_events = events_result.get('items', [])
@@ -147,14 +146,19 @@ def create_calendar_event(
         if conflicting_events:
             event_summary = conflicting_events[0].get('summary', 'desconhecido')
             print(f"Conflito encontrado: {event_summary}")
-            return f"Erro: Horário indisponível. Já existe um evento ('{event_summary}') nesse período."
+            
+            return f"Erro: Horário indisponível. Embora o evento possa caber, já existe um outro evento ('{event_summary}') que impede o intervalo automático de 15 minutos após o término."
 
     except HttpError as error:
         return f"Erro ao verificar conflitos na API: {error}"
     except Exception as e:
         return f"Erro inesperado ao verificar conflitos: {e}"
     
-    # --- Se não houver conflitos, cria o evento ---
+    except HttpError as error:
+        return f"Erro ao verificar conflitos na API: {error}"
+    except Exception as e:
+        return f"Erro inesperado ao verificar conflitos: {e}"
+    
     print("Nenhum conflito. Criando evento...")
     event = {
         'summary': summary,
@@ -189,12 +193,12 @@ def search_calendar_events(query: str, max_results: int = 10):
         return "Erro: O serviço do Google Calendar não foi inicializado."
 
     try:
-        now = datetime.datetime.utcnow().isoformat() + "Z"  # 'Z' indica UTC
+        now = datetime.now(timezone.utc).isoformat()
         events_result = (
             service.events()
             .list(
                 calendarId="primary",
-                q=query,  # O parâmetro de busca
+                q=query, 
                 timeMin=now,
                 maxResults=max_results,
                 singleEvents=True,
@@ -232,10 +236,8 @@ def update_calendar_event(
         return "Erro: O serviço do Google Calendar não foi inicializado."
 
     try:
-        # 1. Primeiro, obtenha o evento existente
         event = service.events().get(calendarId='primary', eventId=event_id).execute()
 
-        # 2. Modifique apenas os campos que foram fornecidos
         if summary is not None:
             event['summary'] = summary
         if location is not None:
@@ -249,7 +251,6 @@ def update_calendar_event(
         if attendees is not None:
             event['attendees'] = [{'email': email} for email in attendees]
 
-        # 3. Envie o evento atualizado de volta
         updated_event = (
             service.events()
             .update(calendarId='primary', eventId=event_id, body=event)

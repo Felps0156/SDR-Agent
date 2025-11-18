@@ -116,3 +116,9 @@ fabric.properties
 .idea/**/azureSettings.xml
 
 # End of https://www.toptal.com/developers/gitignore/api/pycharm
+
+# Banco de dados
+*.sqlite
+
+# Pasta de Tokens
+Token/

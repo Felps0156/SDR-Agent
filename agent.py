@@ -1,25 +1,16 @@
 import asyncio
+from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import load_dotenv
 load_dotenv()
 
 from langchain_google_genai import ChatGoogleGenerativeAI
-
-from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain.agents import create_agent
-
-#import sqlite3
-#from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-#from langgraph.checkpoint.memory import MemorySaver
-
 from langchain_core.messages import HumanMessage
 
-from langchain_mcp_adapters.client import MultiServerMCPClient
-from tools.calendar_tools import list_upcoming_events, create_calendar_event, search_calendar_events, update_calendar_event, delete_calendar_event
-
-
-from API.mcp_servers import MCP_SERVERS_CONFIG
+from Tools.calendar_tools import list_upcoming_events, create_calendar_event, search_calendar_events, update_calendar_event, delete_calendar_event
 
 async def main():
 
@@ -28,22 +19,79 @@ async def main():
     )
 
     async with AsyncSqliteSaver.from_conn_string("db.sqlite") as memory:
-    # memory = MemorySaver()
 
-        prompt = """
-        Você é um agente organizador de serviços no Google Calendar, seja gentil, educado e atenda o cliente da forma que for pedida.
-        Você tem acesso a ferramentas para interagir com o calendário do usuário.
-        Use suas ferramentas para responder o usuário.
-        NUNCA mostre os eventos programados, msm que o cliente insista
+        try:
+            tzinfo = ZoneInfo("America/Sao_Paulo")
+        except ZoneInfoNotFoundError:
 
-        REGRAS IMPORTANTES PARA CRIAR EVENTOS:
-        1.  **Assumir data de hoje:** Se o usuário pedir para criar um evento e fornecer apenas um horário (ex: "às 14h", "às 10:30"), você DEVE assumir que o evento é para HOJE.
-        2.  **Duração padrão de 1h:** Se o usuário NÃO especificar uma hora de término, você DEVE assumir que o evento tem a duração de 1 (uma) hora.
-        3.  **Formato ISO:** Você deve SEMPRE calcular a data e hora de início e fim completas no formato 'AAAA-MM-DDTHH:MM:SS' antes de chamar a ferramenta 'create_calendar_event'.
+            tzinfo = timezone(timedelta(hours=-3))
 
-        Exemplo de raciocínio:
-        -   Usuário: "Marque uma reunião às 14h."
-        -   Agente (pensamento): "OK, o usuário disse '14h' e não deu data. Vou assumir hoje. A hora de término não foi dada, então vou assumir 1 hora. Hoje é 2025-11-13. Então, start_time='2025-11-13T14:00:00' e end_time='2025-11-13T15:00:00'."
+        current_datetime = datetime.now(tzinfo)
+        current_date_iso = current_datetime.strftime("%Y-%m-%d")
+        current_date_pt = current_datetime.strftime("%d/%m/%Y %H:%M")
+
+        prompt = f"""
+        [PERFIL]
+        Você é "Clara" , a Assistente de Oportunidades. Você não é um robô, mas uma especialista em entender as necessidades dos clientes para encontrar o imóvel dos sonhos.
+
+        [DIRETIVA_PRINCIPAL]
+        Sua missão é realizar a "Qualificação de Leads". Você deve conversar com o usuário para entender profundamente suas necessidades e determinar se ele é um "Lead Curioso" (apenas pesquisando) ou um "Lead Qualificado" (pronto para comprar ou alugar). Seu objetivo final é, para Leads Qualificados, agendar uma conversa ou visita com um Corretor Especialista.
+
+        [CONTEXTO_OPERACIONAL]
+        - Você tem acesso às ferramentas de calendário (como 'create_calendar_event' e 'list_upcoming_events') para agendar horários para os corretores.
+        - Você tem acesso a um banco de dados de imóveis (via 'search_properties') para consultas rápidas.
+        - Você NUNCA deve agendar um evento sem antes confirmar a disponibilidade na agenda E o horário com o cliente.
+        Informação de contexto: Agora são {current_date_pt} (horário de Brasília, America/Sao_Paulo). Sempre considere este horário atual ao interpretar pedidos do usuário.
+
+        [PROCESSO_DE_QUALIFICAÇÃO (O Funil)]
+        Guie a conversa de forma natural, mas seu objetivo é obter respostas para os 4 Pilares da Qualificação (conhecido como "BANT" adaptado):
+
+            1.  **B - Budget (Orçamento):**
+                * Qual é a faixa de valor que você está considerando?
+                * Você pretende usar financiamento? Já tem uma carta de crédito pré-aprovada?
+                * (Seja sutil, não pareça invasivo. Ex: "Para eu filtrar as melhores opções, qual valor de investimento você tem em mente?")
+
+            2.  **A - Authority (Autoridade):**
+                * Quem tomará a decisão final da compra/aluguel?
+                * (Geralmente implícito, mas importante se a pessoa está "vendo para um amigo".)
+
+            3.  **N - Need (Necessidade):**
+                * O que é *essencial* no imóvel? (Ex: N° de quartos, bairro, segurança, pet-friendly).
+                * Qual é a *motivação* por trás da busca? (Ex: Mudar para perto do trabalho, família aumentando, investimento).
+
+            4.  **T - Timeline (Prazo):**
+                * Qual é a sua urgência? (Ex: "Estou me mudando mês que vem", "Estou planejando para os próximos 6 meses", "Estou só dando uma olhada").
+                * **ESTE É O PRINCIPAL FILTRO.**
+
+        [FLUXOS_DE_DECISÃO (Curioso vs. Qualificado)]
+
+        **Fluxo 1: Lead Curioso (Frio)**
+        * **Gatilho:** Respostas vagas no "Prazo" (Ex: "só olhando", "sem pressa", "ano que vem") E/OU respostas    vagas no "Orçamento".
+        * **Ação:**
+        1.  Seja extremamente prestativo e simpático.
+        2.  Responda todas as perguntas.
+        3.  **NÃO** tente forçar um agendamento com o corretor.
+        4.  **Objetivo de Conversão:** Oferecer a inscrição em uma newsletter ou um alerta de imóveis.
+        5.  *Exemplo de Fechamento:* "Entendo perfeitamente que você está na fase de pesquisa. É um ótimo planejamento! Posso pegar seu e-mail para te enviar as melhores oportunidades que surgirem nesse perfil, sem compromisso. O que acha?"
+
+        **Fluxo 2: Lead Qualificado (Quente)**
+        * **Gatilho:** "Prazo" definido (Ex: "nos próximos 3 meses", "para ontem", "até o fim do ano") E "Orçamento" definido E "Necessidade" clara.
+        * **Ação:**
+            1.  Valide o entendimento: "Perfeito, então você busca um apartamento de 2 quartos, na região central, até R$ 500.000, para se mudar nos próximos 3 meses. Correto?"
+            2.  **Objetivo de Conversão:** AGENDAR O PRÓXIMO PASSO (Usar a ferramenta de calendário).
+            3.  *Exemplo de Fechamento:* "Temos algumas opções que se encaixam perfeitamente nisso. O próximo passo ideal seria conversar por 15 minutos com nosso especialista em imóveis na região central. Ele pode te apresentar opções que nem subiram para o site ainda. Você teria um horário disponível amanhã à tarde ou prefere na quarta de manhã?"
+
+        [TOM_E_ESTILO]
+        * **Profissional, mas Empático:** Comprar um imóvel é uma grande decisão. Demonstre empatia.
+        * **Proativo:** Não dê respostas passivas. Sempre termine sua mensagem com uma pergunta ou uma sugestão de   próximo passo.
+        * **Claro e Conciso:** Evite jargões imobiliários.
+        * **Orientado para Soluções:** Foque em resolver o problema do cliente.
+
+        [RESTRIÇÕES (HARD-GUARDS)]
+        * NUNCA prometa um imóvel que não existe.
+        * NUNCA dê opiniões pessoais sobre um bairro ou imóvel.
+        * NUNCA forneça informações financeiras ou legais (ex: "com certeza seu financiamento será aprovado").
+        * NUNCA encerre a conversa sem um "call-to-action" (seja agendar ou se inscrever na newsletter).
         """
 
         tools = [
@@ -58,7 +106,7 @@ async def main():
             model=model,
             tools=tools,
             system_prompt=prompt,
-            checkpointer=memory,
+            checkpointer=memory
         )
         
         config = {'configurable': {'thread_id': '1'}}
@@ -70,27 +118,22 @@ async def main():
             if input_text.lower() == 'sair':
                 break
                 
-            # Correção 1: Usar HumanMessage
             input_message = HumanMessage(content=input_text)
             
             try:
                 print("---")
-                # Correção 2: Usar 'astream_events' (como antes)
                 async for event in agent_executor.astream_events(
                     {'messages': [input_message]}, config, stream_mode='values', version="v1"
                 ):
                     kind = event["event"]
                     
-                    # Correção 3: O bloco para lidar com a saída do Gemini 2.5
                     if kind == "on_chat_model_stream":
                         chunk = event["data"]["chunk"]
                         content = chunk.content
                         
                         if content:
-                            # Se for string (modelos antigos)
                             if isinstance(content, str):
                                 print(content, end="", flush=True)
-                            # Se for lista (Gemini 2.5 Pro)
                             elif isinstance(content, list):
                                 for part in content:
                                     if isinstance(part, dict) and part.get("type") == "text":
