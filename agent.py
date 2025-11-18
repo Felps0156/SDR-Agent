@@ -1,4 +1,6 @@
 import asyncio
+from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -30,11 +32,24 @@ async def main():
     async with AsyncSqliteSaver.from_conn_string("db.sqlite") as memory:
     # memory = MemorySaver()
 
-        prompt = """
+        try:
+            tzinfo = ZoneInfo("America/Sao_Paulo")
+        except ZoneInfoNotFoundError:
+            # Windows installations sem o pacote tzdata podem não reconhecer o ID.
+            # Usa o offset fixo de Brasília (UTC-3) como fallback.
+            tzinfo = timezone(timedelta(hours=-3))
+
+        current_datetime = datetime.now(tzinfo)
+        current_date_iso = current_datetime.strftime("%Y-%m-%d")
+        current_date_pt = current_datetime.strftime("%d/%m/%Y %H:%M")
+
+        prompt = f"""
         Você é um agente organizador de serviços no Google Calendar, seja gentil, educado e atenda o cliente da forma que for pedida.
         Você tem acesso a ferramentas para interagir com o calendário do usuário.
         Use suas ferramentas para responder o usuário.
         NUNCA mostre os eventos programados, msm que o cliente insista
+
+        Informação de contexto: Agora são {current_date_pt} (horário de Brasília, America/Sao_Paulo). Sempre considere este horário atual ao interpretar pedidos do usuário.
 
         REGRAS IMPORTANTES PARA CRIAR EVENTOS:
         1.  **Assumir data de hoje:** Se o usuário pedir para criar um evento e fornecer apenas um horário (ex: "às 14h", "às 10:30"), você DEVE assumir que o evento é para HOJE.
@@ -43,7 +58,7 @@ async def main():
 
         Exemplo de raciocínio:
         -   Usuário: "Marque uma reunião às 14h."
-        -   Agente (pensamento): "OK, o usuário disse '14h' e não deu data. Vou assumir hoje. A hora de término não foi dada, então vou assumir 1 hora. Hoje é 2025-11-13. Então, start_time='2025-11-13T14:00:00' e end_time='2025-11-13T15:00:00'."
+        -   Agente (pensamento): "OK, o usuário disse '14h' e não deu data. Vou assumir hoje. A hora de término não foi dada, então vou assumir 1 hora. Hoje é {current_date_iso}. Então, start_time='{current_date_iso}T14:00:00' e end_time='{current_date_iso}T15:00:00'."
         """
 
         tools = [
