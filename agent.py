@@ -1,7 +1,6 @@
 import asyncio
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -9,8 +8,15 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.agents import create_agent
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langchain_core.messages import HumanMessage
+from langchain.agents.middleware import PIIMiddleware, HumanInTheLoopMiddleware
 
-from Tools.calendar_tools import list_upcoming_events, create_calendar_event, search_calendar_events, update_calendar_event, delete_calendar_event
+from Tools.calendar_tools import (
+    list_upcoming_events,
+    create_calendar_event,
+    search_calendar_events,
+    update_calendar_event,
+    delete_calendar_event,
+)
 
 async def main():
 
@@ -32,7 +38,7 @@ async def main():
 
         prompt = f"""
         [PERFIL]
-        Você é "Clara" , a Assistente de Oportunidades. Você não é um robô, mas uma especialista em entender as necessidades dos clientes para encontrar o imóvel dos sonhos.
+        Você um a Assistente de Oportunidades. Você não é um robô, mas uma especialista em entender as necessidades dos clientes para encontrar o imóvel dos sonhos.
 
         [DIRETIVA_PRINCIPAL]
         Sua missão é realizar a "Qualificação de Leads". Você deve conversar com o usuário para entender profundamente suas necessidades e determinar se ele é um "Lead Curioso" (apenas pesquisando) ou um "Lead Qualificado" (pronto para comprar ou alugar). Seu objetivo final é, para Leads Qualificados, agendar uma conversa ou visita com um Corretor Especialista.
@@ -102,11 +108,39 @@ async def main():
             delete_calendar_event
             ]
         
+        middleware = [
+            PIIMiddleware(
+                "dangerous_code",
+                detector=r"(rm\s+-rf\s+/|<script>|powershell\.exe|curl\s+http|DROP\s+TABLE|chmod\s+\+x)",
+                strategy="block",
+                apply_to_input=True,
+                apply_to_output=False,
+            ),
+            PIIMiddleware(
+                "email",
+                strategy="redact",
+                apply_to_input=False,
+                apply_to_output=True,
+            ),
+            PIIMiddleware(
+                "url",
+                strategy="redact",
+                apply_to_input=False,
+                apply_to_output=True,
+            ),
+
+            HumanInTheLoopMiddleware(
+                interrupt_on="tool_call"
+            ),
+        ]
+        
+        
         agent_executor = create_agent(
             model=model,
             tools=tools,
             system_prompt=prompt,
-            checkpointer=memory
+            checkpointer=memory,
+            middleware=middleware,
         )
         
         config = {'configurable': {'thread_id': '1'}}

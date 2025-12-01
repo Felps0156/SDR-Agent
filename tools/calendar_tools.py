@@ -63,7 +63,16 @@ def list_upcoming_events(max_results: int = 10):
         if not events:
             return "Nenhum evento encontrado."
         
-        return events 
+        safe_events = []
+        for event in events:
+            safe_events.append({
+                "start": event.get("start", {}).get("dateTime"),
+                "end": event.get("end", {}).get("dateTime"),
+                "status": event.get("status", "confirmed"),
+                "title": event.get("summary", "Compromisso"),
+            })
+
+        return safe_events 
         
     except HttpError as error:
         return f"Erro ao acessar a API do Google Calendar: {error}"
@@ -81,102 +90,109 @@ def create_calendar_event(
 ):
     """
     Cria um novo evento no Google Calendar, APENAS SE O HORÁRIO ESTIVER LIVRE.
-    - 'start_time' pode ser uma data/hora completa ('AAAA-MM-DDTHH:MM:SS') ou apenas uma hora ('HH:MM:SS').
-    - Se apenas a hora for fornecida, o evento será agendado para o dia de HOJE.
-    - Se 'end_time' não for fornecido, o evento terá automaticamente a duração de 1 hora.
-    - 'attendees' deve ser uma lista de emails (strings).
-    - Se o horário já estiver ocupado, a ferramenta retornará uma mensagem de erro e não diga qual evento esta agendado para o msm horario.
+    - 'start_time' pode ser 'AAAA-MM-DDTHH:MM:SS' ou 'HH:MM:SS' (usa hoje).
+    - Se 'end_time' não for fornecido, dura 1h.
+    - 'attendees' é lista de e-mails.
     """
     if not service:
         return "Erro: O serviço do Google Calendar não foi inicializado."
 
-    local_tz = pytz.timezone('America/Sao_Paulo') 
-
+    local_tz = pytz.timezone("America/Sao_Paulo")
+ 
     try:
-        start_dt_naive = datetime.fromisoformat(start_time)
-    except ValueError:
-        try:
-            time_obj = time.fromisoformat(start_time)
-            today = datetime.now(local_tz).date() 
-            start_dt_naive = datetime.combine(today, time_obj)
-        except ValueError:
-            return "Formato de 'start_time' inválido. Use 'AAAA-MM-DDTHH:MM:SS' ou 'HH:MM:SS' (para hoje)."
 
+        try:
+            start_dt_naive = datetime.fromisoformat(start_time)
+        except ValueError:
+            time_obj = time.fromisoformat(start_time)
+            today = datetime.now(local_tz).date()
+            start_dt_naive = datetime.combine(today, time_obj)
+    except Exception:
+        return (
+            "Formato de 'start_time' inválido. "
+            "Use 'AAAA-MM-DDTHH:MM:SS' ou 'HH:MM:SS' (para hoje)."
+        )
 
     if start_dt_naive.tzinfo is None:
         start_dt = local_tz.localize(start_dt_naive)
     else:
-        start_dt = start_dt_naive
+        start_dt = start_dt_naive.astimezone(local_tz)
 
     if end_time:
         try:
-            end_dt_naive = datetime.fromisoformat(end_time)
-        except ValueError:
             try:
+                end_dt_naive = datetime.fromisoformat(end_time)
+            except ValueError:
                 time_obj = time.fromisoformat(end_time)
                 end_dt_naive = datetime.combine(start_dt.date(), time_obj)
-            except ValueError:
-                return "Formato de 'end_time' inválido. Use 'AAAA-MM-DDTHH:MM:SS' ou 'HH:MM:SS'."
-        
+        except Exception:
+            return (
+                "Formato de 'end_time' inválido. "
+                "Use 'AAAA-MM-DDTHH:MM:SS' ou 'HH:MM:SS'."
+            )
+
         if end_dt_naive.tzinfo is None:
             end_dt = local_tz.localize(end_dt_naive)
         else:
-            end_dt = end_dt_naive
+            end_dt = end_dt_naive.astimezone(local_tz)
     else:
         end_dt = start_dt + timedelta(hours=1)
 
     try:
         buffer_minutes = 15
-        
         conflict_check_end_dt = end_dt + timedelta(minutes=buffer_minutes)
 
-        print(f"Verificando conflitos para o evento ({start_dt.strftime('%H:%M')} às {end_dt.strftime('%H:%M')})")
-        print(f"Aplicando buffer de {buffer_minutes} min. Verificando disponibilidade até {conflict_check_end_dt.strftime('%H:%M')}...")
-        
-        events_result = service.events().list(
-            calendarId='primary',
-            timeMin=start_dt.isoformat(),
-            timeMax=conflict_check_end_dt.isoformat(), 
-            singleEvents=True, 
-            maxResults=1 
-        ).execute()
-        
-        conflicting_events = events_result.get('items', [])
-        
+        print(
+            f"Verificando conflitos ({start_dt.strftime('%H:%M')} "
+            f"às {end_dt.strftime('%H:%M')})"
+        )
+
+        events_result = (
+            service.events()
+            .list(
+                calendarId="primary",
+                timeMin=start_dt.isoformat(),
+                timeMax=conflict_check_end_dt.isoformat(),
+                singleEvents=True,
+                maxResults=1,
+            )
+            .execute()
+        )
+
+        conflicting_events = events_result.get("items", [])
+
         if conflicting_events:
-            event_summary = conflicting_events[0].get('summary', 'desconhecido')
-            print(f"Conflito encontrado: {event_summary}")
-            
-            return f"Erro: Horário indisponível. Embora o evento possa caber, já existe um outro evento ('{event_summary}') que impede o intervalo automático de 15 minutos após o término."
+            event_summary = conflicting_events[0].get("summary", "desconhecido")
+            return (
+                "Erro: Horário indisponível. "
+                f"Já existe um outro evento ('{event_summary}') "
+                "que impede o intervalo automático de 15 minutos após o término."
+            )
 
     except HttpError as error:
         return f"Erro ao verificar conflitos na API: {error}"
     except Exception as e:
         return f"Erro inesperado ao verificar conflitos: {e}"
-    
-    except HttpError as error:
-        return f"Erro ao verificar conflitos na API: {error}"
-    except Exception as e:
-        return f"Erro inesperado ao verificar conflitos: {e}"
-    
-    print("Nenhum conflito. Criando evento...")
+
     event = {
-        'summary': summary,
-        'location': location,
-        'description': description,
-        'start': {
-            'dateTime': start_dt.isoformat(),
-            'timeZone': 'America/Sao_Paulo',
+        "summary": summary,
+        "location": location,
+        "description": description,
+        "start": {
+            "dateTime": start_dt.isoformat(),
+            "timeZone": "America/Sao_Paulo",
         },
-        'end': {
-            'dateTime': end_dt.isoformat(),
-            'timeZone': 'America/Sao_Paulo',
+        "end": {
+            "dateTime": end_dt.isoformat(),
+            "timeZone": "America/Sao_Paulo",
         },
-        'attendees': [{'email': email} for email in attendees] if attendees else []
+        "attendees": [{"email": email} for email in attendees] if attendees else [],
     }
 
     try:
-        created_event = service.events().insert(calendarId='primary', body=event).execute()
+        created_event = (
+            service.events().insert(calendarId="primary", body=event).execute()
+        )
         return f"Evento criado com sucesso! Link: {created_event.get('htmlLink')}"
     except HttpError as error:
         return f"Erro ao criar evento na API: {error}"
