@@ -129,8 +129,10 @@ async def main():
                 apply_to_output=True,
             ),
 
-            HumanInTheLoopMiddleware(
-                interrupt_on="tool_call"
+            HumanInTheLoopMiddleware( 
+                interrupt_on={
+                    "write_file": True,
+                }
             ),
         ]
         

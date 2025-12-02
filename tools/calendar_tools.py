@@ -86,7 +86,8 @@ def create_calendar_event(
     end_time: str = None,
     attendees: List[str] = None,
     location: str = None,
-    description: str = None
+    description: str = None,
+    **kwargs
 ):
     """
     Cria um novo evento no Google Calendar, APENAS SE O HORÁRIO ESTIVER LIVRE.
@@ -174,6 +175,18 @@ def create_calendar_event(
     except Exception as e:
         return f"Erro inesperado ao verificar conflitos: {e}"
 
+    print("\n[HITL] Solicitação para CRIAR evento no Google Calendar:")
+    print(f"  Título : {summary}")
+    print(f"  Início : {start_time}")
+    print(f"  Fim    : {end_time}")
+    if kwargs:
+        print(f"  Extras : {kwargs}")
+
+    resp = input("[HITL] Confirmar criação desse evento? (s/N): ").strip().lower()
+    if resp not in ("s", "sim", "y", "yes"):
+        print("[HITL] Criação de evento CANCELADA pelo humano.")
+        return "Criação de evento cancelada por intervenção humana."
+    
     event = {
         "summary": summary,
         "location": location,
@@ -222,6 +235,7 @@ def search_calendar_events(query: str, max_results: int = 10):
             )
             .execute()
         )
+    
         events = events_result.get("items", [])
 
         if not events:
@@ -242,7 +256,8 @@ def update_calendar_event(
     end_time: str = None,
     location: str = None,
     description: str = None,
-    attendees: List[str] = None
+    attendees: List[str] = None,
+    kwargs = None,
 ):
     """
     Atualiza um evento existente usando seu 'event_id'.
@@ -251,6 +266,18 @@ def update_calendar_event(
     if not service:
         return "Erro: O serviço do Google Calendar não foi inicializado."
 
+    print("\n[HITL] Solicitação para ALTERAR evento no Google Calendar:")
+    print(f"  Título : {summary}")
+    print(f"  Início : {start_time}")
+    print(f"  Fim    : {end_time}")
+    if kwargs:
+        print(f"  Extras : {kwargs}")
+
+    resp = input("[HITL] Confirmar alteração desse evento? (s/N): ").strip().lower()
+    if resp not in ("s", "sim", "y", "yes"):
+        print("[HITL] Alteração de evento CANCELADA pelo humano.")
+        return "Alteração de evento cancelada por intervenção humana."
+    
     try:
         event = service.events().get(calendarId='primary', eventId=event_id).execute()
 
