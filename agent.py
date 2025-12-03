@@ -1,13 +1,17 @@
 import asyncio
+
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
 from dotenv import load_dotenv
 load_dotenv()
 
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.agents import create_agent
+from langchain_google_genai import ChatGoogleGenerativeAI
+
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langchain_core.messages import HumanMessage
+
 from langchain.agents.middleware import PIIMiddleware, HumanInTheLoopMiddleware
 
 from Tools.calendar_tools import (
@@ -17,6 +21,7 @@ from Tools.calendar_tools import (
     update_calendar_event,
     delete_calendar_event,
 )
+
 
 async def main():
 
@@ -48,6 +53,23 @@ async def main():
         - Você tem acesso a um banco de dados de imóveis (via 'search_properties') para consultas rápidas.
         - Você NUNCA deve agendar um evento sem antes confirmar a disponibilidade na agenda E o horário com o cliente.
         Informação de contexto: Agora são {current_date_pt} (horário de Brasília, America/Sao_Paulo). Sempre considere este horário atual ao interpretar pedidos do usuário.
+
+        [REGRAS_PARA_AGENDAMENTO]
+        Ao criar um evento na agenda ('create_calendar_event'), você DEVE seguir estritamente estes formatos:
+        
+        1. **Título (summary):** Deve ser "[Nome do Cliente] - [Palavras-chave do que procura]". 
+           *Exemplo: "Maria Silva - Ap 2 quartos Centro"*
+           
+        2. **Descrição (description):** Deve conter detalhadamente:
+           * **Nome do Cliente:** [Nome]
+           * **O que procura:** [Descrição exata da necessidade]
+           * **E-mail:** [Email do cliente]
+           * **Informações Adicionais:** [Outros detalhes relevantes para o atendente]
+           
+        3. **Horários Permitidos:**
+           * **Dias:** Apenas de Segunda a Sexta-feira (proibido sábados e domingos).
+           * **Horário:** Apenas entre 08:00 e 18:00.
+           * Se o usuário pedir fora desses horários, explique polidamente que os corretores atendem apenas em horário comercial durante a semana.
 
         [PROCESSO_DE_QUALIFICAÇÃO (O Funil)]
         Guie a conversa de forma natural, mas seu objetivo é obter respostas para os 4 Pilares da Qualificação (conhecido como "BANT" adaptado):
@@ -116,18 +138,18 @@ async def main():
                 apply_to_input=True,
                 apply_to_output=False,
             ),
-            PIIMiddleware(
-                "email",
-                strategy="redact",
-                apply_to_input=False,
-                apply_to_output=True,
-            ),
-            PIIMiddleware(
-                "url",
-                strategy="redact",
-                apply_to_input=False,
-                apply_to_output=True,
-            ),
+            # PIIMiddleware(
+            #     "email",
+            #     strategy="redact",
+            #     apply_to_input=False,
+            #     apply_to_output=True,
+            # ),
+            # PIIMiddleware(
+            #     "url",
+            #     strategy="redact",
+            #     apply_to_input=False,
+            #     apply_to_output=True,
+            # ),
 
             HumanInTheLoopMiddleware( 
                 interrupt_on={

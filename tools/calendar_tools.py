@@ -94,6 +94,11 @@ def create_calendar_event(
     - 'start_time' pode ser 'AAAA-MM-DDTHH:MM:SS' ou 'HH:MM:SS' (usa hoje).
     - Se 'end_time' não for fornecido, dura 1h.
     - 'attendees' é lista de e-mails.
+    
+    REGRAS DE NEGÓCIO:
+    - Agendamentos permitidos apenas de Segunda a Sexta, das 08:00 às 18:00.
+    - Título (summary) deve ser: "[Nome] - [Assunto/Palavras-chave]"
+    - Descrição deve conter: Nome, O que procura, E-mail e detalhes extras.
     """
     if not service:
         return "Erro: O serviço do Google Calendar não foi inicializado."
@@ -118,6 +123,17 @@ def create_calendar_event(
         start_dt = local_tz.localize(start_dt_naive)
     else:
         start_dt = start_dt_naive.astimezone(local_tz)
+
+    # --- VALIDAÇÃO DE HORÁRIO COMERCIAL E DIAS ÚTEIS ---
+    # Dias da semana: 0=Segunda, 1=Terça, ..., 5=Sábado, 6=Domingo
+    if start_dt.weekday() >= 5:
+        return "Erro: Não é permitido agendar reuniões aos sábados e domingos. Por favor, escolha um dia de segunda a sexta-feira."
+
+    # Horário comercial: 08:00 às 18:00
+    # Verifica se o início é antes das 08:00 ou se é a partir das 18:00
+    if start_dt.hour < 8 or start_dt.hour >= 18:
+        return "Erro: O agendamento deve ser feito apenas em horário comercial (entre 08:00 e 18:00)."
+    # ---------------------------------------------------
 
     if end_time:
         try:
